@@ -156,7 +156,7 @@ app.post('/api/auth/register', async (req, res) => {
     { email: newUser.email, role: 'user', user_id: nextId },
     JWT_SECRET, { expiresIn: '7d' }
   );
-  res.cookie('es_token', token, { httpOnly: true, sameSite: 'None', secure: true, maxAge: 7*24*3600*1000 });
+  res.cookie('es_token', token, { httpOnly: true, sameSite: 'Lax', secure: false, maxAge: 7*24*3600*1000 });
   ok(res, { token, user: { name, email: newUser.email, role: 'user', wallet: 0, user_id: nextId } });
 });
 
@@ -183,7 +183,7 @@ app.post('/api/auth/login', async (req, res) => {
     { email: user.email, role: user.role, user_id: user.user_id },
     JWT_SECRET, { expiresIn: '7d' }
   );
-  res.cookie('es_token', token, { httpOnly: true, sameSite: 'None', secure: true, maxAge: 7*24*3600*1000 });
+  res.cookie('es_token', token, { httpOnly: true, sameSite: 'Lax', secure: false, maxAge: 7*24*3600*1000 });
   ok(res, {
     token,
     user: { name: user.name, email: user.email, role: user.role || 'user', wallet: user.wallet || 0, user_id: user.user_id },
@@ -635,12 +635,22 @@ app.put('/api/admin/user/:email', requireAdmin, async (req, res) => {
   ok(res, { updated: true });
 });
 
-// DELETE /api/admin/user/:email
-app.delete('/api/admin/user/:email', requireAdmin, async (req, res) => {
-  const { error } = await sb.from('users').delete().eq('email', req.params.email);
+// GET /api/admin/settings/topup
+app.get('/api/admin/settings/topup', requireAdmin, async (req, res) => {
+  const { data, error } = await sb.from('settings').select('value').eq('key', 'topup_qr').maybeSingle();
   if (error) return err(res, error.message, 500);
-  ok(res, { deleted: true });
+  ok(res, data ? data.value : { url: 'https://img5.pic.in.th/file/secure-sv1/qr-ldb.jpg' });
 });
+
+// PUT /api/admin/settings/topup
+app.post('/api/admin/settings/topup', requireAdmin, async (req, res) => {
+  const { url } = req.body;
+  const { error } = await sb.from('settings').upsert({ key: 'topup_qr', value: { url } });
+  if (error) return err(res, error.message, 500);
+  ok(res, { saved: true });
+});
+
+// DELETE /api/admin/user/:email
 
 // ══════════════════════════════════════════════════════════════
 //  TOPUP REQUESTS (QR / SLIP)
