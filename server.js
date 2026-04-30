@@ -642,6 +642,85 @@ app.delete('/api/admin/user/:email', requireAdmin, async (req, res) => {
   ok(res, { deleted: true });
 });
 
+// ══════════════════════════════════════════════════════════════
+//  TOPUP REQUESTS (QR / SLIP)
+// ══════════════════════════════════════════════════════════════
+
+// POST /api/topup-request/create
+app.post('/api/topup-request/create', requireAuth, async (req, res) => {
+  const { amount, slip_url, method } = req.body;
+  const amt = numParse(amount);
+  if (amt < 5000) return err(res, 'ເຕີມຂັ້ນຕ່ຳ 5,000 ກີບ');
+  if (!slip_url) return err(res, 'ກະລຸນາແນບຮູບໃບໂອນ');
+
+  const reqObj = {
+    id: 'TR' + Date.now(),
+    user_email: req.user.email,
+    user_id: req.user.user_id,
+    amount: amt,
+    slip_url,
+    method: method || 'BCEL One',
+    status: 'pending',
+    created_at: new Date().toLocaleString('lo-LA', { timeZone: 'Asia/Bangkok' }),
+  };
+
+  const { error } = await sb.from('topup_requests').insert(reqObj);
+  if (error) return err(res, error.message, 500);
+  ok(res, { success: true, message: 'ສົ່ງຄຳຮ້ອງແລ້ວ, ລໍຖ້າ Admin ກວດສອບ' });
+});
+
+// GET /api/admin/topup-requests
+app.get('/api/admin/topup-requests', requireAdmin, async (req, res) => {
+  const { data, error } = await sb.from('topup_requests').select('*').order('created_at', { ascending: false });
+  if (error) return err(res, error.message, 500);
+  ok(res, data || []);
+});
+
+// PUT /api/admin/topup-request/approve
+app.put('/api/admin/topup-request/approve', requireAdmin, async (req, res) => {
+  const { id } = req.body;
+  if (!id) return err(res, 'Missing ID');
+
+  const { data: request, error: fErr } = await sb.from('topup_requests').select('*').eq('id', id).maybeSingle();
+  if (fErr || !request) return err(res, 'ບໍ່ພົບຄຳຮ້ອງ');
+  if (request.status !== 'pending') return err(res, 'ຄຳຮ້ອງນີ້ຖືກຈັດການແລ້ວ');
+
+  // Use lock to prevent double funding
+  const lockKey = 'topup_approve:' + id;
+  const result = await withLock(lockKey, async () => {
+    // 1. Update request status
+    const { error: uErr } = await sb.from('topup_requests').update({ status: 'approved', processed_at: new Date().toISOString() }).eq('id', id);
+    if (uErr) return { error: 'Update request failed' };
+
+    // 2. Add wallet to user
+    const { data: user } = await sb.from('users').select('wallet').eq('email', request.user_email).maybeSingle();
+    if (!user) return { error: 'User not found' };
+
+    const { error: wErr } = await sb.from('users').update({ wallet: (user.wallet || 0) + request.amount }).eq('email', request.user_email);
+    if (wErr) return { error: 'Update wallet failed' };
+
+    return { success: true };
+  });
+
+  if (result.error) return err(res, result.error, 500);
+  ok(res, { approved: true });
+});
+
+// PUT /api/admin/topup-request/reject
+app.put('/api/admin/topup-request/reject', requireAdmin, async (req, res) => {
+  const { id, reason } = req.body;
+  const { error } = await sb.from('topup_requests').update({ status: 'rejected', remark: reason || '', processed_at: new Date().toISOString() }).eq('id', id);
+  if (error) return err(res, error.message, 500);
+  ok(res, { rejected: true });
+});
+
+// GET /api/user/topup-requests
+app.get('/api/user/topup-requests', requireAuth, async (req, res) => {
+  const { data, error } = await sb.from('topup_requests').select('*').eq('user_email', req.user.email).order('created_at', { ascending: false });
+  if (error) return err(res, error.message, 500);
+  ok(res, data || []);
+});
+
 
 // ══════════════════════════════════════════════════════════════
 //  WONDD API INTEGRATION
